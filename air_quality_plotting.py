@@ -13,7 +13,7 @@ st.set_page_config(layout="wide", page_title="Current Air Quality Map")
 def load_data():
     """Loads and returns the clean air quality data."""
     # Ensure this file name matches your clean CSV file exactly
-    file_path = 'clean_air_quality_for_map.csv'
+    file_path = 'AQI_Thailand_FINAL_DATA_20251207_142243.csv'
     try:
         df = pd.read_csv(file_path)
         return df
