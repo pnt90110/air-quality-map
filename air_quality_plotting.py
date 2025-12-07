@@ -76,7 +76,7 @@ if show_current_only:
     df_filtered = df_filtered[df_filtered['record_type'] == 'Current']
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Date Range")
+st.sidebar.subheader("Date")
 
 # Calculate overall min/max dates for picker limits
 max_date_overall = df['record_date'].max()
@@ -86,67 +86,35 @@ min_date_overall = df['record_date'].min()
 min_date_filtered = df_filtered['record_date'].min()
 max_date_filtered = df_filtered['record_date'].max()
 
-
 # Handle edge case where filtered data is empty
 if pd.isna(min_date_filtered):
     st.sidebar.warning("No data available for the selected record type.")
     min_date_filtered = pd.to_datetime('today').date()
     max_date_filtered = pd.to_datetime('today').date()
-    
-# Store initial filtered dates for comparison
-if 'initial_min_date' not in st.session_state:
-    st.session_state['initial_min_date'] = min_date_filtered
-if 'initial_max_date' not in st.session_state:
-    st.session_state['initial_max_date'] = max_date_filtered
 
+# Store initial filtered date for session
+if 'initial_date' not in st.session_state:
+    st.session_state['initial_date'] = max_date_filtered
 
-# 1. From Date
-from_date = st.sidebar.date_input(
-    'From Date:',
-    value=min_date_filtered,
-    min_value=min_date_overall,
-    max_value=max_date_overall,
-    disabled=df_filtered.empty or show_current_only,
-    key='from_date_input'
-)
-
-# 2. To Date
-to_date = st.sidebar.date_input(
-    'To Date:',
+# Single Date selector (not a range)
+selected_date = st.sidebar.date_input(
+    'Date:',
     value=max_date_filtered,
     min_value=min_date_overall,
     max_value=max_date_overall,
     disabled=df_filtered.empty or show_current_only,
-    key='to_date_input'
+    key='date_input'
 )
 
-date_range_changed = (
-    (from_date != st.session_state['initial_min_date']) or 
-    (to_date != st.session_state['initial_max_date'])
-)
-
-# Apply the Date Filter Logic
+# Apply the Date Filter Logic (single-date)
 if not df_filtered.empty:
     # If "Current" is checked, use only 2025-12-07
     if show_current_only:
         current_date = pd.to_datetime('2025-12-07').date()
         df_filtered = df_filtered[df_filtered['record_date'] == current_date]
     else:
-        # Ensure 'From Date' is not after 'To Date'
-        if from_date > to_date:
-            st.sidebar.error("Error: 'From Date' cannot be after 'To Date'.")
-            # Swap them to maintain filtering logic
-            start_date = to_date
-            end_date = from_date
-        else:
-            start_date = from_date
-            end_date = to_date
-            
-        # Apply the date range filter
-        df_filtered = df_filtered[
-            (df_filtered['record_date'] >= start_date) & 
-            (df_filtered['record_date'] <= end_date)
-        ]
+        # Filter to the single selected date
+        df_filtered = df_filtered[df_filtered['record_date'] == selected_date]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Location & Pollutant Filters")
