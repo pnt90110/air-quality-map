@@ -29,10 +29,19 @@ def aqi_category(aqi):
 # Use st.cache_data to load the CSV only once for performance
 @st.cache_data
 def load_data():
-    """Loads and returns the clean air quality data with added category columns."""
+    """Loads, cleans, and prepares ALL air quality data records (Current and Past)."""
     file_path = 'AQI_Thailand_FINAL_DATA_20251207_142243.csv'
     try:
         df = pd.read_csv(file_path)
+        
+        # Convert date/time columns to proper datetime objects.
+        # errors='coerce' turns invalid parsing (like 'N/A') into NaT (Not a Time/Date)
+        # .dt.date is used for record_date to strip the time part for clean date filtering
+        df['record_date'] = pd.to_datetime(df['record_date'], errors='coerce').dt.date
+        df['time_utc'] = pd.to_datetime(df['time_utc'], errors='coerce')
+        
+        # Clean 'aqi_overall' by replacing 'N/A' (from Past data rows) with 0 before converting to integer
+        df['aqi_overall'] = df['aqi_overall'].replace('N/A', 0).astype(int)
         
         # Apply the helper function to create new columns for coloring/display
         df[['aqi_category', 'color_code']] = df['aqi_overall'].apply(
@@ -53,34 +62,104 @@ st.sidebar.header("Filter & View Options")
 
 # --- 3. Sidebar Filtering (Interactivity) ---
 
-# Selector for City/Station
-city_names = ['All Stations'] + df['city_name'].unique().tolist()
+# --- Record Type Toggle ---
+st.sidebar.subheader("Record Type")
+show_current_only = st.sidebar.toggle(
+    'Show only Data from this week (Exclude Past Records)',
+    value=True # Default to TRUE (Current only)
+)
+
+# Initialize df_filtered with the full dataset copy
+df_filtered = df.copy()
+
+# Apply the Record Type Filter
+if show_current_only:
+    # Filter the DataFrame to include only 'Current' records
+    df_filtered = df_filtered[df_filtered['record_type'] == 'Current'].reset_index(drop=True)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Date Range")
+
+# Calculate min/max dates from the currently filtered data
+min_date = df_filtered['record_date'].min()
+max_date = df_filtered['record_date'].max()
+
+# Check if min_date/max_date are valid before attempting to use them
+if pd.isna(min_date):
+    st.sidebar.warning("No data available for the selected record type.")
+    # Set default values to today if no data is found, so the app doesn't crash
+    min_date = pd.to_datetime('today').date()
+    max_date = pd.to_datetime('today').date()
+    
+# --- CHANGE HERE: Separate From and To Date Inputs ---
+
+# 1. From Date
+from_date = st.sidebar.date_input(
+    'From Date:',
+    value=min_date,  # Default to the earliest available date
+    min_value=min_date,
+    max_value=max_date,
+    disabled=df_filtered.empty
+)
+
+# 2. To Date
+to_date = st.sidebar.date_input(
+    'To Date:',
+    value=max_date,  # Default to the latest available date
+    min_value=min_date,
+    max_value=max_date,
+    disabled=df_filtered.empty
+)
+
+# Apply the Date Filter Logic
+if not df_filtered.empty:
+    # Ensure 'From Date' is not after 'To Date'
+    if from_date > to_date:
+        st.sidebar.error("Error: 'From Date' cannot be after 'To Date'.")
+        # Swap them to maintain filtering logic, or set a neutral state
+        start_date = to_date
+        end_date = from_date
+    else:
+        start_date = from_date
+        end_date = to_date
+        
+    # Apply the date range filter
+    df_filtered = df_filtered[
+        (df_filtered['record_date'] >= start_date) & 
+        (df_filtered['record_date'] <= end_date)
+    ]
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Location & Pollutant Filters")
+
+# Selector for City/Station (This uses df_filtered now)
+city_names = ['All Stations'] + df_filtered['city_name'].unique().tolist()
 selected_city = st.sidebar.selectbox(
     'Select Station Location',
     city_names
 )
 
-# Filter the DataFrame based on the user selection
+# Apply City Filter
 if selected_city != 'All Stations':
-    df_filtered = df[df['city_name'] == selected_city]
-else:
-    df_filtered = df.copy()
+    df_filtered = df_filtered[df_filtered['city_name'] == selected_city]
 
 # Slider for Pollutant Threshold
-pm25_min = float(df['pm25'].min())
-pm25_max = float(df['pm25'].max())
+# Note: min/max values are taken from the overall df to avoid filter cascade issues
+pm25_min_overall = float(df['pm25'].min())
+pm25_max_overall = float(df['pm25'].max())
+
 pm25_threshold = st.sidebar.slider(
     'Minimum PM2.5 Level (µg/m³)',
-    min_value=0.0, # Start from 0 for better UX
-    max_value=pm25_max,
-    value=0.0, # Default: show all
+    min_value=0.0,
+    max_value=pm25_max_overall,
+    value=0.0,
     step=1.0
 )
 
 # Apply PM2.5 filter
 df_filtered = df_filtered[df_filtered['pm25'] >= pm25_threshold].reset_index(drop=True)
 
-# --- 4. Key Summary Metrics (New Section) ---
+# --- 4. Key Summary Metrics ---
 
 st.subheader("Key Air Quality Summary")
 
@@ -104,7 +183,7 @@ if not df_filtered.empty:
         value=f"{df_filtered['pm25'].mean():.1f}"
     )
     col3.metric(
-        label="Stations Shown",
+        label="Records Shown",
         value=len(df_filtered)
     )
     st.markdown("---")
@@ -119,8 +198,7 @@ if not df_filtered.empty:
     # Define the order and discrete color map for Plotly
     category_order = ['Good', 'Moderate', 'Unhealthy for Sensitive Groups', 'Unhealthy', 'Very Unhealthy', 'Hazardous']
     # Create the color map dictionary for Plotly
-    # We use the aqi_category function logic to generate the map: 'Good' -> '#009966', etc.
-    color_map = {cat: aqi_category(i * 51)[1] for i, cat in enumerate(category_order)} # Using proxy AQI values to get the color code
+    color_map = {cat: aqi_category(i * 51)[1] for i, cat in enumerate(category_order)} 
     
     # Create the scatter_mapbox figure using Plotly Express
     fig = px.scatter_mapbox(
@@ -153,18 +231,30 @@ if not df_filtered.empty:
     
 
 else:
-    st.warning("No stations match the selected filter criteria. Try reducing the minimum PM2.5 threshold.")
+    st.warning("No stations match the selected filter criteria. Try changing the record type toggle or reducing the minimum PM2.5 threshold.")
 
 # --- 6. Data Table Preview (Enhanced with st.data_editor) ---
 
 st.markdown("---")
 st.header("Filtered Data Table")
-st.caption(f"Showing {len(df_filtered)} of {len(df)} total records.")
+st.caption(f"Showing {len(df_filtered)} of {len(df)} total records (before record type filter).")
 
-# Use st.data_editor for interactive table experience
-st.data_editor(
-    df_filtered[['city_name', 'time_utc', 'aqi_overall', 'aqi_category', 'pm25', 'pm10', 'o3', 'temp', 'humidity']],
-    # REMOVE THE column_config DICTIONARY ENTIRELY
-    hide_index=True,
-    use_container_width=True
-)
+if not df_filtered.empty:
+    # Use st.data_editor for interactive table experience
+    st.data_editor(
+        # CRITICAL CHANGE: Added 'record_date' and included 'record_type' for clarity
+        df_filtered[['record_type', 'city_name', 'record_date', 'time_utc', 'aqi_overall', 'aqi_category', 'pm25', 'pm10', 'o3', 'temp', 'humidity']],
+        
+        # Using NumberColumn for AQI and PM2.5 to avoid the Progress compatibility error
+        column_config={
+            "aqi_overall": st.column_config.NumberColumn(
+                "Overall AQI",
+                format="%d",
+            ),
+            "pm25": st.column_config.NumberColumn("PM2.5", format="%.1f µg/m³"),
+            "city_name": "Station Location",
+            "aqi_category": "Health Category"
+        },
+        hide_index=True,
+        use_container_width=True
+    )
