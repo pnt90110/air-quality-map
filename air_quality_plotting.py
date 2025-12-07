@@ -64,70 +64,89 @@ st.sidebar.header("Filter & View Options")
 
 # --- Record Type Toggle ---
 st.sidebar.subheader("Record Type")
-show_current_only = st.sidebar.toggle(
-    'Show only Data from this week (Exclude Past Records)',
-    value=True # Default to TRUE (Current only)
-)
 
 # Initialize df_filtered with the full dataset copy
 df_filtered = df.copy()
 
-# Apply the Record Type Filter
+# Checkbox for "Current" data only
+show_current_only = st.sidebar.checkbox("Current (12-7-2025) (Not including forecasts)", value=False, help="Show only current data from 2025-12-07")
+
+# Apply Current filter if checkbox is checked
 if show_current_only:
-    # Filter the DataFrame to include only 'Current' records
-    df_filtered = df_filtered[df_filtered['record_type'] == 'Current'].reset_index(drop=True)
+    df_filtered = df_filtered[df_filtered['record_type'] == 'Current']
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Date Range")
 
-# Calculate min/max dates from the currently filtered data
-min_date = df_filtered['record_date'].min()
-max_date = df_filtered['record_date'].max()
+# Calculate overall min/max dates for picker limits
+max_date_overall = df['record_date'].max()
+min_date_overall = df['record_date'].min()
 
-# Check if min_date/max_date are valid before attempting to use them
-if pd.isna(min_date):
+# Calculate min/max dates from the currently filtered data (for initial value)
+min_date_filtered = df_filtered['record_date'].min()
+max_date_filtered = df_filtered['record_date'].max()
+
+
+# Handle edge case where filtered data is empty
+if pd.isna(min_date_filtered):
     st.sidebar.warning("No data available for the selected record type.")
-    # Set default values to today if no data is found, so the app doesn't crash
-    min_date = pd.to_datetime('today').date()
-    max_date = pd.to_datetime('today').date()
+    min_date_filtered = pd.to_datetime('today').date()
+    max_date_filtered = pd.to_datetime('today').date()
     
-# --- CHANGE HERE: Separate From and To Date Inputs ---
+# Store initial filtered dates for comparison
+if 'initial_min_date' not in st.session_state:
+    st.session_state['initial_min_date'] = min_date_filtered
+if 'initial_max_date' not in st.session_state:
+    st.session_state['initial_max_date'] = max_date_filtered
+
 
 # 1. From Date
 from_date = st.sidebar.date_input(
     'From Date:',
-    value=min_date,  # Default to the earliest available date
-    min_value=min_date,
-    max_value=max_date,
-    disabled=df_filtered.empty
+    value=min_date_filtered,
+    min_value=min_date_overall,
+    max_value=max_date_overall,
+    disabled=df_filtered.empty or show_current_only,
+    key='from_date_input'
 )
 
 # 2. To Date
 to_date = st.sidebar.date_input(
     'To Date:',
-    value=max_date,  # Default to the latest available date
-    min_value=min_date,
-    max_value=max_date,
-    disabled=df_filtered.empty
+    value=max_date_filtered,
+    min_value=min_date_overall,
+    max_value=max_date_overall,
+    disabled=df_filtered.empty or show_current_only,
+    key='to_date_input'
+)
+
+date_range_changed = (
+    (from_date != st.session_state['initial_min_date']) or 
+    (to_date != st.session_state['initial_max_date'])
 )
 
 # Apply the Date Filter Logic
 if not df_filtered.empty:
-    # Ensure 'From Date' is not after 'To Date'
-    if from_date > to_date:
-        st.sidebar.error("Error: 'From Date' cannot be after 'To Date'.")
-        # Swap them to maintain filtering logic, or set a neutral state
-        start_date = to_date
-        end_date = from_date
+    # If "Current" is checked, use only 2025-12-07
+    if show_current_only:
+        current_date = pd.to_datetime('2025-12-07').date()
+        df_filtered = df_filtered[df_filtered['record_date'] == current_date]
     else:
-        start_date = from_date
-        end_date = to_date
-        
-    # Apply the date range filter
-    df_filtered = df_filtered[
-        (df_filtered['record_date'] >= start_date) & 
-        (df_filtered['record_date'] <= end_date)
-    ]
+        # Ensure 'From Date' is not after 'To Date'
+        if from_date > to_date:
+            st.sidebar.error("Error: 'From Date' cannot be after 'To Date'.")
+            # Swap them to maintain filtering logic
+            start_date = to_date
+            end_date = from_date
+        else:
+            start_date = from_date
+            end_date = to_date
+            
+        # Apply the date range filter
+        df_filtered = df_filtered[
+            (df_filtered['record_date'] >= start_date) & 
+            (df_filtered['record_date'] <= end_date)
+        ]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Location & Pollutant Filters")
@@ -148,16 +167,25 @@ if selected_city != 'All Stations':
 pm25_min_overall = float(df['pm25'].min())
 pm25_max_overall = float(df['pm25'].max())
 
-pm25_threshold = st.sidebar.slider(
-    'Minimum PM2.5 Level (µg/m³)',
+# --- MODIFIED: Combined PM2.5 Range Slider ---
+pm25_range = st.sidebar.slider(
+    'PM2.5 Level Range (µg/m³)',
     min_value=0.0,
     max_value=pm25_max_overall,
-    value=0.0,
+    # Default to the entire range (0 to max)
+    value=(0.0, pm25_max_overall), 
     step=1.0
 )
 
-# Apply PM2.5 filter
-df_filtered = df_filtered[df_filtered['pm25'] >= pm25_threshold].reset_index(drop=True)
+# Extract min and max from the tuple
+pm25_min_threshold = pm25_range[0]
+pm25_max_threshold = pm25_range[1]
+
+# Apply PM2.5 filters
+df_filtered = df_filtered[
+    (df_filtered['pm25'] >= pm25_min_threshold) &
+    (df_filtered['pm25'] <= pm25_max_threshold)
+].reset_index(drop=True)
 
 # --- 4. Key Summary Metrics ---
 
